@@ -2,6 +2,7 @@ import bpy
 from os.path import isfile
 import subprocess
 import glob
+from pathlib import Path
 
 ###############################
 DIRECTORY = "C:/Users/romai/Documents/Projets/26 - Bezier Quest/"
@@ -47,20 +48,31 @@ def create_file(filepath):
     subprocess.run(command, check=True)
 
 
-def remap_for_children_files(new_file, ng_name):
-    files = glob.glob(DIRECTORY + "*.blend")
+def remap_in_children_files(new_file, ng_name):
+    """
+    Remap in every file of the current folder
+    """
+    files = glob.glob(DIRECTORY + "SP*.blend")
 
     script = (
-        "import bpy",
-        f"if {ng_name} in bpy.data.node_groups.keys():",
-        f"\n  existing=bpy.data.node_groups['{ng_name}']",
-        f"\n  with bpy.data.libraries.load('{new_file}', link=True) as (_, data_to):",
-        f"\n      data_to.node_groups = ['{ng_name}']",
-        f"\n      existing.user_remap(data_to.node_groups[0]);bpy.ops.wm.save_mainfile()",
+        "import bpy"
+        + f"\nif '{ng_name}' in bpy.data.node_groups.keys():"
+        + f"\n  existing=bpy.data.node_groups['{ng_name}']"
+        + f"\n  with bpy.data.libraries.load('{new_file}', link=True) as (_, data_to):"
+        + f"\n      data_to.node_groups = ['{ng_name}']"
+        + f"\n  existing.user_remap(data_to.node_groups[0]);bpy.ops.wm.save_mainfile()"
     )
 
     for f in files:
-        command = ["blender", "--background", f, "--python-expr", script]
+        if Path(f) != Path(bpy.data.filepath) and Path(f) != Path(new_file):
+            command = [
+                "blender",
+                "--background",
+                "--factory-startup",  # Not sure it's faster
+                f,
+                "--python-expr",
+                script,
+            ]
 
         # Run the command
         subprocess.run(command, check=True)
@@ -79,6 +91,7 @@ def move_ng_to_level_file(ng_name: str, level):
     linked_ng = link_node_group(target_filepath, ng_name)
     if linked_ng is not None:
         replaced_ng.user_remap(linked_ng)
+        remap_in_children_files(target_filepath, ng_name)
         return True
     return False
 
@@ -133,7 +146,6 @@ def unregister():
 if __package__ == "__main__":
     register()
 
-# TODO remap in other files which links it too !
 # TODO auto find which level : - all contained ng must be at lower levels
 # TODO move between level : Must use linking and not append somehow
 # TODO auto move all children when a group is upgraded
