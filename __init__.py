@@ -83,9 +83,9 @@ def move_ng_to_level_file(ng_name: str, level):
     return False
 
 
-class NO_OT_move_node_group(bpy.types.Operator):
-    bl_idname = "wm.no_move_node_group"
-    bl_label = "NO - Move Node Group"
+class MYN_OT_move_node_group(bpy.types.Operator):
+    bl_idname = "wm.myn_move_node_group"
+    bl_label = "MYN - Move Node Group"
     bl_options = {"REGISTER", "UNDO"}
 
     level: bpy.props.IntProperty(
@@ -116,7 +116,7 @@ class NO_OT_move_node_group(bpy.types.Operator):
 
 
 classes = [
-    NO_OT_move_node_group,
+    MYN_OT_move_node_group,
 ]
 
 

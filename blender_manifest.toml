@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
-id = "SurfacePsycho"
+id = "MoveYoNode"
 version = "1.0.0"
-name = "Node Organizer"
-tagline = "Move dependent node groups into a file hierarchy"
+name = "Move yo' Node"
+tagline = "Organize node groups with dependencies into a file hierarchy"
 maintainer = "Romain Guimbal"
 type = "add-on"
 
