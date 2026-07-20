@@ -7,6 +7,10 @@ from pathlib import Path
 ###############################
 DIRECTORY = "C:/Users/romai/Documents/Projets/26 - Bezier Quest/"
 PREFIX = DIRECTORY + "SP Assets"
+
+BLUE = "\033[94m"
+RED = "\033[91m"
+RESET = "\033[0m"
 # To move as a preference
 ###############################
 
@@ -14,20 +18,29 @@ PREFIX = DIRECTORY + "SP Assets"
 def append_node_group_to_file(target_filepath, node_group_name):
     source_path = bpy.data.filepath.replace("\\", "/")
 
-    command = [
-        "blender",
-        "--background",
-        target_filepath,
-        "--python-expr",
-        f"import bpy;\nwith bpy.data.libraries.load('{source_path}', link=False, set_fake=True, recursive=True) as (_, data_to):\n data_to.node_groups = ['{node_group_name}']\nbpy.ops.wm.save_mainfile()",
-    ]
+    script = (
+        f"import bpy"
+        + f"\nwith bpy.data.libraries.load('{source_path}', link=True, recursive=False) as (_, data_to):"
+        + f"\n  data_to.node_groups = ['{node_group_name}']"
+        + "\nng = data_to.node_groups[0]"
+        + "\nif ng is not None:"
+        + "\n    ng.make_local()"
+        + "\n    ng.use_fake_user = True"
+        + "\n    bpy.ops.wm.save_mainfile()"
+        + f"\nelse: print(f'{'RED'}Node group not found{'RESET'}')"
+    )
+
+    command = ["blender", "--background", target_filepath, "--python-expr", script]
 
     # Run the command
     subprocess.run(command, check=True)
 
 
 def link_node_group(target_filepath, ng_name: str) -> list[bpy.types.NodeGroup]:
-    with bpy.data.libraries.load(target_filepath, link=True) as (_, data_to):
+    with bpy.data.libraries.load(target_filepath, link=True, recursive=False) as (
+        _,
+        data_to,
+    ):
         data_to.node_groups = [ng_name]
 
     linked_ng = data_to.node_groups[0]
@@ -58,13 +71,19 @@ def remap_in_children_files(new_file, ng_name):
         "import bpy"
         + f"\nif '{ng_name}' in bpy.data.node_groups.keys():"
         + f"\n  existing=bpy.data.node_groups['{ng_name}']"
-        + f"\n  with bpy.data.libraries.load('{new_file}', link=True) as (_, data_to):"
+        + f"\n  with bpy.data.libraries.load('{new_file}', link=True, recursive = False) as (_, data_to):"
         + f"\n      data_to.node_groups = ['{ng_name}']"
+        + "\nng = data_to.node_groups[0]"
+        + "\nif ng is not None:"
         + f"\n  existing.user_remap(data_to.node_groups[0]);bpy.ops.wm.save_mainfile()"
+        + "\nelse:"
+        + f"\n  print(f'{'RED'}Node group not found{'RESET'}')"
     )
 
     for f in files:
-        if Path(f) != Path(bpy.data.filepath) and Path(f) != Path(new_file):
+        if Path(f) != Path(bpy.data.filepath) and Path(f) != Path(
+            new_file
+        ):  # TODO filter lower levels too
             command = [
                 "blender",
                 "--background",
@@ -149,7 +168,9 @@ if __package__ == "__main__":
 # TODO auto find which level : - all contained ng must be at lower levels
 # TODO move between level : Must use linking and not append somehow
 # TODO auto move all children when a group is upgraded
-# TODO de-duplicate utils and stuff
+# TODO de-duplicate, rename and other utils
+# TODO append>edit>replace workflow
+
 
 # Level 0 : small utils ----> Level n : end user tools
 # SPO "SurfacePsycho Organizer"
