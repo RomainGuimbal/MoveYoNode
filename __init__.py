@@ -3,6 +3,7 @@ from os.path import isfile
 import subprocess
 import glob
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 ###############################
 DIRECTORY = "C:/Users/romai/Documents/Projets/26 - Bezier Quest/"
@@ -73,28 +74,34 @@ def remap_in_children_files(new_file, ng_name):
         + f"\n  existing=bpy.data.node_groups['{ng_name}']"
         + f"\n  with bpy.data.libraries.load('{new_file}', link=True, recursive = False) as (_, data_to):"
         + f"\n      data_to.node_groups = ['{ng_name}']"
-        + "\nng = data_to.node_groups[0]"
-        + "\nif ng is not None:"
-        + f"\n  existing.user_remap(data_to.node_groups[0]);bpy.ops.wm.save_mainfile()"
-        + "\nelse:"
-        + f"\n  print(f'{'RED'}Node group not found{'RESET'}')"
+        +  "\n  ng = data_to.node_groups[0]"
+        +  "\n  if ng is not None:"
+        + f"\n      existing.user_remap(ng);bpy.ops.wm.save_mainfile()"
+        +  "\n  else:"
+        + f"\n      print(f'{'RED'}Node group not found{'RESET'}')"
     )
 
-    for f in files:
-        if Path(f) != Path(bpy.data.filepath) and Path(f) != Path(
-            new_file
-        ):  # TODO filter lower levels too
-            command = [
-                "blender",
-                "--background",
-                "--factory-startup",  # Not sure it's faster
-                f,
-                "--python-expr",
-                script,
-            ]
+    def _run_blender(f):
+        command = [
+            "blender",
+            "--background",
+            "--factory-startup",
+            f,
+            "--python-expr",
+            script,
+        ]
+        return subprocess.run(command, check=True)
 
-        # Run the command
-        subprocess.run(command, check=True)
+    targets = [
+        f
+        for f in files
+        if Path(f) != Path(bpy.data.filepath)
+        and Path(f) != Path(new_file)  # TODO filter lower levels too
+    ]
+
+    # limit process count
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        list(ex.map(_run_blender, targets))
 
 
 def move_ng_to_level_file(ng_name: str, level):
@@ -165,6 +172,7 @@ def unregister():
 if __package__ == "__main__":
     register()
 
+# TODO Make paths relative
 # TODO auto find which level : - all contained ng must be at lower levels
 # TODO move between level : Must use linking and not append somehow
 # TODO auto move all children when a group is upgraded
@@ -173,4 +181,3 @@ if __package__ == "__main__":
 
 
 # Level 0 : small utils ----> Level n : end user tools
-# SPO "SurfacePsycho Organizer"
