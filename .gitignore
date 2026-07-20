@@ -1,2 +1,9 @@
-.zig-cache/
-zig-out/
+*.blend1
+*.pyc
+*.whl
+*.prof
+*.blend
+
+__pycache__/
+
+TODELETE.py

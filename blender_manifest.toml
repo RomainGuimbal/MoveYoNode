@@ -1,0 +1,23 @@
+schema_version = "1.0.0"
+
+id = "SurfacePsycho"
+version = "1.0.0"
+name = "Node Organizer"
+tagline = "Move dependent node groups into a file hierarchy"
+maintainer = "Romain Guimbal"
+type = "add-on"
+
+website = "https://github.com/RomainGuimbal/Node-Organizer"
+
+tags = ["Geometry Nodes"]
+
+blender_version_min = "5.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+copyright = ["2026 Romain Guimbal"]
+
+# platforms = ["windows-x64", "macos-x64", "macos-arm64", "linux-x64"]
+
+[permissions]
+files = "Create and open blend files"
