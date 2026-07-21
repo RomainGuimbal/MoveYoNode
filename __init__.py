@@ -4,6 +4,7 @@ import subprocess
 import glob
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+import re
 
 ###############################
 DIRECTORY = "C:/Users/romai/Documents/Projets/26 - Bezier Quest/"
@@ -14,6 +15,30 @@ RED = "\033[91m"
 RESET = "\033[0m"
 # To move as a preference
 ###############################
+
+
+def find_level_from_path(path)->int:
+    match = re.search(r"Level (\d*)\.blend$", path)
+    if match:
+        lvl = match.group(1)
+        return int(lvl)
+    else:
+        return -1
+    
+def node_group_level(ng: bpy.types.GeometryNodeTree) -> int:
+    max_lvl = -1
+    for node in ng.nodes:
+        if node.type == "GROUP":
+            if node.node_tree.library:
+                lvl = find_level_from_path(node.node_tree.library.filepath)
+                if lvl != -1 :
+                    if max_lvl < lvl:
+                        max_lvl = lvl
+                else:
+                    raise Exception(f"'{node.node_tree.name}' must be sent to a lower level first")
+            else:
+                raise Exception(f"'{node.node_tree.name}' must be sent to a lower level first")
+    return max_lvl + 1
 
 
 def append_node_group_to_file(target_filepath, node_group_name):
@@ -28,7 +53,7 @@ def append_node_group_to_file(target_filepath, node_group_name):
         + "\n    ng.make_local()"
         + "\n    ng.use_fake_user = True"
         + "\n    bpy.ops.wm.save_mainfile()"
-        + f"\nelse: print(f'{'RED'}Node group not found{'RESET'}')"
+        + f"\nelse: print(f'{RED}Node group not found{RESET}')"
     )
 
     command = ["blender", "--background", target_filepath, "--python-expr", script]
@@ -70,15 +95,15 @@ def remap_in_children_files(new_file, ng_name):
 
     script = (
         "import bpy"
-        + f"\nif '{ng_name}' in bpy.data.node_groups.keys():"
-        + f"\n  existing=bpy.data.node_groups['{ng_name}']"
+        + f"\nexisting=bpy.data.node_groups.get('{ng_name}')"
+        + f"\nif existing is not None and not existing.library:"
         + f"\n  with bpy.data.libraries.load('{new_file}', link=True, recursive = False) as (_, data_to):"
         + f"\n      data_to.node_groups = ['{ng_name}']"
-        +  "\n  ng = data_to.node_groups[0]"
-        +  "\n  if ng is not None:"
+        + "\n  ng = data_to.node_groups[0]"
+        + "\n  if ng is not None:"
         + f"\n      existing.user_remap(ng);bpy.ops.wm.save_mainfile()"
-        +  "\n  else:"
-        + f"\n      print(f'{'RED'}Node group not found{'RESET'}')"
+        + "\n  else:"
+        + f"\n      print(f'{RED}Node group not found{RESET}')"
     )
 
     def _run_blender(f):
@@ -130,26 +155,32 @@ class MYN_OT_move_node_group(bpy.types.Operator):
     level: bpy.props.IntProperty(
         name="Dependency Level", description="", default=0, min=0
     )
+    
+    ng = None
 
     @classmethod
     def poll(cls, context):
         return context.area.type == "NODE_EDITOR"
 
     def execute(self, context):
-        ng_name = context.space_data.edit_tree.nodes.active.node_tree.name
-        print(ng_name)
-        if move_ng_to_level_file(ng_name, self.level):
-            self.report({"INFO"}, f"Node group moved successfully")
+        if move_ng_to_level_file(self.ng.name, self.level):
+            print(BLUE,"Node group moved successfully", RESET)
+            self.report({"INFO"}, "Node group moved successfully")
         else:
-            self.report({"ERROR"}, f"Node group move failed")
+            self.report({"ERROR"}, "Node group move failed")
         return {"FINISHED"}
 
     def draw(self, context):
         layout = self.layout
-        layout.prop(self, "level")
+        layout.label(text = f"Detected Level: {self.level}")
 
     def invoke(self, context, event):
-        # call itself and run
+        self.ng = context.space_data.edit_tree.nodes.active.node_tree
+        try :
+            self.level = node_group_level(self.ng)
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"FINISHED"}
         wm = context.window_manager
         return wm.invoke_props_dialog(self)
 
@@ -173,7 +204,6 @@ if __package__ == "__main__":
     register()
 
 # TODO Make paths relative
-# TODO auto find which level : - all contained ng must be at lower levels
 # TODO move between level : Must use linking and not append somehow
 # TODO auto move all children when a group is upgraded
 # TODO de-duplicate, rename and other utils
