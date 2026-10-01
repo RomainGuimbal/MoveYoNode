@@ -8,16 +8,16 @@ import re
 import os
 import tempfile
 
-###############################
+####################################
 DIRECTORY = "C:/Users/romai/Documents/Projets/26 - Bezier Quest/"
 PREFIX = DIRECTORY + "SP Assets"
-
-BLUE = "\033[94m"
-RED = "\033[91m"
-RESET = "\033[0m"
 # To move as a preference
-###############################
+####################################
 
+RED = "\033[91m"
+GREEN = "\033[32m"
+BLUE = "\033[94m"
+RESET = "\033[0m"
 
 def find_level_from_path(path) -> int:
     match = re.search(r"Level (\d*)\.blend$", path)
@@ -118,7 +118,7 @@ def remap_in_children_files(parent_file, ng_name, lvl):
     if not targets:
         return
 
-    max_workers = min(3, os.cpu_count() or 3, len(targets))
+    max_workers = min(2, os.cpu_count() or 2, len(targets))
     # split files evenly across workers
     chunks = [targets[i::max_workers] for i in range(max_workers)]
 
@@ -198,7 +198,7 @@ def move_ng_to_level_file(ng_name: str, level):
 
 
 class MYN_OT_move_node_group(bpy.types.Operator):
-    bl_idname = "wm.myn_move_node_group"
+    bl_idname = "node.myn_move_node_group"
     bl_label = "MYN - Move Node Group"
     bl_options = {"REGISTER", "UNDO"}
 
