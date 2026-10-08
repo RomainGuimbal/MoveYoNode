@@ -8,6 +8,8 @@ import re
 import os
 import tempfile
 
+from blender_asset_tracer.blendfile import open_cached
+
 ####################################
 DIRECTORY = "C:/Users/romai/Documents/Projets/26 - Bezier Quest/"
 PREFIX = DIRECTORY + "SP Assets"
@@ -110,6 +112,18 @@ def children_files(parent: str, lvl):
     return children
 
 
+def file_contains_node_group(filepath, ng_name):
+    """Check if a blend file contains a specific node group using BAT (no Blender process)."""
+    try:
+        with open_cached(filepath) as bf:
+            for nt in bf.find_blocks_from_code(b'NT'):
+                if nt.id.name.decode().removeprefix('NT') == ng_name:
+                    return True
+            return False
+    except Exception:
+        return False
+
+
 def remap_in_children_files(parent_file, ng_name, lvl):
     """
     Remap Node Group in every file of the current folder
@@ -119,9 +133,15 @@ def remap_in_children_files(parent_file, ng_name, lvl):
     if not targets:
         return
 
-    max_workers = min(2, os.cpu_count() or 2, len(targets))
+    # Fast path: filter files using BAT without opening Blender
+    files_with_ng = [f for f in targets if file_contains_node_group(f, ng_name)]
+    
+    if not files_with_ng:
+        return
+
+    max_workers = min(2, os.cpu_count() or 2, len(files_with_ng))
     # split files evenly across workers
-    chunks = [targets[i::max_workers] for i in range(max_workers)]
+    chunks = [files_with_ng[i::max_workers] for i in range(max_workers)]
 
     def make_script(file_list):
         return (
