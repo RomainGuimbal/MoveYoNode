@@ -293,7 +293,7 @@ class MYN_OT_AddLocalGeometryNodeGroups(bpy.types.Operator):
             self.report({"INFO"}, "No other local Geometry Node groups found")
             return {"FINISHED"}
 
-                # Add each group as a node, positioned in a grid pattern with 30 columns
+        # Add each group as a node, positioned in a grid pattern with 30 columns
         grid_width = 30  # Number of columns in the grid
         for i, ng in enumerate(local_groups):
             node = node_tree.nodes.new("GeometryNodeGroup")
@@ -315,7 +315,7 @@ def get_level_from_ng(ng: bpy.types.NodeGroup) -> int:
     return 0
 
 
-def remap_name_in_files(ng_name: str, new_name: str, level: int):
+def remap_name_in_files(ng_name: str, new_name: str, level: int, parent_file: str):
     """
     Remap a node group name in all files at or above the given level.
     Similar to remap_in_children_files but for renaming.
@@ -341,6 +341,7 @@ def remap_name_in_files(ng_name: str, new_name: str, level: int):
             f"files = {file_list!r}\n"
             f"ng_name = {ng_name!r}\n"
             f"new_name = {new_name!r}\n"
+            f"parent_file = {parent_file!r}\n"
             "for f in files:\n"
             "    try:\n"
             "        bpy.ops.wm.open_mainfile(filepath=f)\n"
@@ -348,11 +349,23 @@ def remap_name_in_files(ng_name: str, new_name: str, level: int):
             "        if existing is None:\n"
             "            print(f'[Skip] {f}: no node group named {ng_name!r}')\n"
             "            continue\n"
-            "        # Rename the node group\n"
-            "        existing.name = new_name\n"
-            "        existing.name = new_name  # Ensure name is set\n"
+            "        # If the node group is linked, relink it from the source file\n"
+            "        if existing.library:\n"
+            "            # Unlink the old node group\n"
+            "            existing.user_clear()\n"
+            "            bpy.data.node_groups.remove(existing)\n"
+            "            # Relink the renamed node group from the source file\n"
+            "            with bpy.data.libraries.load(parent_file, link=True, recursive=False) as (_, data_to):\n"
+            "                data_to.node_groups = [new_name]\n"
+            "            if data_to.node_groups:\n"
+            f"                print(f'{BLUE}[Relinked] {{f}}: {{ng_name}} -> {{new_name}}{RESET}')\n"
+            "            else:\n"
+            f"                print(f'{RED}[ERROR] {{f}}: Failed to relink {{new_name}}{RESET}')\n"
+            "        else:\n"
+            "            # Rename the local node group\n"
+            "            existing.name = new_name\n"
+            f"            print(f'{BLUE}[Renamed] {{f}}: {{ng_name}} -> {{new_name}}{RESET}')\n"
             "        bpy.ops.wm.save_mainfile(filepath=f)\n"
-            f"        print(f'{BLUE}[Renamed] {{f}}: {{ng_name}} -> {{new_name}}{RESET}')\n"
             "    except Exception as e:\n"
             f"        print(f'{RED}[ERROR] {{f}}: {{e}}{RESET}')\n"
             "        traceback.print_exc()\n"
@@ -387,7 +400,9 @@ def remap_name_in_files(ng_name: str, new_name: str, level: int):
         list(ex.map(_run_blender, chunks))
 
 
-def rename_node_group(ng_name: str, new_name: str, level: int) -> bool:
+def rename_node_group(
+    ng_name: str, new_name: str, level: int, parent_file: str
+) -> bool:
     """
     Rename a node group and update references in all related files.
     """
@@ -399,11 +414,12 @@ def rename_node_group(ng_name: str, new_name: str, level: int) -> bool:
     current_ng.name = new_name
 
     # Update in all files at this level and above
-    remap_name_in_files(ng_name, new_name, level)
+    remap_name_in_files(ng_name, new_name, level, parent_file)
 
     return True
 
-### TODO TEST IT !
+
+### FAILS !!!!!!!
 class MYN_OT_rename_node_group(bpy.types.Operator):
     bl_idname = "node.myn_rename_node_group"
     bl_label = "MYN - Rename Node Group"
@@ -420,7 +436,8 @@ class MYN_OT_rename_node_group(bpy.types.Operator):
     def execute(self, context):
         context.window.cursor_set("WAIT")
         level = get_level_from_ng(self.ng)
-        if rename_node_group(self.ng.name, self.new_name, level):
+        parent_file = bpy.data.filepath
+        if rename_node_group(self.ng.name, self.new_name, level, parent_file):
             print(GREEN, "Node group renamed successfully", RESET)
             self.report({"INFO"}, "Node group renamed successfully")
         else:
@@ -445,7 +462,7 @@ class MYN_OT_rename_node_group(bpy.types.Operator):
 classes = [
     MYN_OT_move_node_group,
     MYN_OT_AddLocalGeometryNodeGroups,
-    MYN_OT_rename_node_group,
+    # MYN_OT_rename_node_group,
 ]
 
 
