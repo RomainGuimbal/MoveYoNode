@@ -301,7 +301,7 @@ class MYN_OT_AddLocalGeometryNodeGroups(bpy.types.Operator):
             # Calculate grid position
             row = i // grid_width
             col = i % grid_width
-            node.location = (cursor.x + col * 160, cursor.y - row * 300)
+            node.location = (cursor.x + col * 160, cursor.y - row * 500)
 
         return {"FINISHED"}
 
