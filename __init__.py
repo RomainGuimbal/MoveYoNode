@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 import re
 import os
 import tempfile
-
 from blender_asset_tracer.blendfile import open_cached
 
 ####################################
@@ -16,10 +15,15 @@ PREFIX = DIRECTORY + "SP Assets"
 # To move as a preference
 ####################################
 
+# ─────────────────────────── ANSI COLORS ─────────────────────────────────── #
 RED = "\033[91m"
 GREEN = "\033[32m"
 BLUE = "\033[94m"
 RESET = "\033[0m"
+# ──────────────────────────────────────────────────────────────────────────── #
+
+def blue(text: str) -> str:
+    return f"{BLUE}{text}{RESET}"
 
 
 def find_level_from_path(path) -> int:
@@ -116,8 +120,8 @@ def file_contains_node_group(filepath, ng_name):
     """Check if a blend file contains a specific node group using BAT (no Blender process)."""
     try:
         with open_cached(filepath) as bf:
-            for nt in bf.find_blocks_from_code(b'NT'):
-                if nt.id.name.decode().removeprefix('NT') == ng_name:
+            for nt in bf.find_blocks_from_code(b"NT"):
+                if nt.id.name.decode().removeprefix("NT") == ng_name:
                     return True
             return False
     except Exception:
@@ -135,7 +139,7 @@ def remap_in_children_files(parent_file, ng_name, lvl):
 
     # Fast path: filter files using BAT without opening Blender
     files_with_ng = [f for f in targets if file_contains_node_group(f, ng_name)]
-    
+
     if not files_with_ng:
         return
 
@@ -459,10 +463,231 @@ class MYN_OT_rename_node_group(bpy.types.Operator):
         return wm.invoke_props_dialog(self)
 
 
+def find_users(target_group_name: str, target_socket, socket_side: str) -> None:
+    """
+    Walk every node group in bpy.data.node_groups.
+    For each one that contains a Group node referencing target_group_name,
+    check whether that Group node has a connection on the requested socket.
+
+    Prints a structured report to the console.
+    """
+    side = socket_side.upper()
+    if side not in ("INPUT", "OUTPUT"):
+        raise ValueError("socket_side must be 'INPUT' or 'OUTPUT'")
+
+    target_ng = bpy.data.node_groups.get(target_group_name)
+    if target_ng is None:
+        print(
+            f"[ERROR] Node group '{target_group_name}' not found in bpy.data.node_groups."
+        )
+        available = [ng.name for ng in bpy.data.node_groups]
+        print(f"        Available groups: {available}")
+        return
+
+    print("=" * 60)
+    print(f"Target node group : '{target_group_name}'")
+    print(f"Socket side       : {side}")
+    print(f"Socket filter     : {repr(target_socket)}")
+    print("=" * 60)
+
+    # { ng_name: { "ng": ng, "nodes": [ {node info}, … ] } }
+    # Keeps insertion order; accumulates ALL instances per parent group.
+    users: dict = {}
+
+    for ng in bpy.data.node_groups:
+        if ng is target_ng:  # skip the target itself
+            continue
+        if not hasattr(ng, "nodes"):
+            continue
+
+        for node in ng.nodes:
+            # Only consider Group nodes that point to our target
+            if node.type != "GROUP":
+                continue
+            if node.node_tree is not target_ng:
+                continue
+
+            # Ensure the parent group has an entry (may already exist from a
+            # previous instance of the target inside the same parent).
+            if ng.name not in users:
+                users[ng.name] = {"ng": ng, "nodes": []}
+
+            # ── Determine which socket collection to inspect ──────────────
+            # node.inputs  → correspond to the group's inputs  (SOCKET_SIDE INPUT)
+            # node.outputs → correspond to the group's outputs (SOCKET_SIDE OUTPUT)
+            sockets = node.inputs if side == "INPUT" else node.outputs
+
+            # ── Find the socket by name or index ─────────────────────────
+            matched_socket = None
+            if isinstance(target_socket, int):
+                if 0 <= target_socket < len(sockets):
+                    matched_socket = sockets[target_socket]
+            else:
+                matched_socket = sockets.get(target_socket)
+
+            node_info = {
+                "node_name": node.name,
+                "node_label": node.label,
+                "socket_found": matched_socket is not None,
+                "connected": False,
+                "socket_name": None,
+                "links": [],
+            }
+
+            if matched_socket is not None:
+                node_info["socket_name"] = matched_socket.name
+                node_info["connected"] = matched_socket.is_linked
+
+                if matched_socket.is_linked:
+                    for link in matched_socket.links:
+                        if side == "INPUT":
+                            node_info["links"].append(
+                                f"{link.from_node.name!r} → socket '{link.from_socket.name}'"
+                            )
+                        else:
+                            node_info["links"].append(
+                                f"→ {link.to_node.name!r} socket '{link.to_socket.name}'"
+                            )
+
+            users[ng.name]["nodes"].append(node_info)
+
+    # ─── Report ──────────────────────────────────────────────────────────────
+    total_instances = sum(len(v["nodes"]) for v in users.values())
+
+    print(
+        f"\n▶ Node groups that USE '{target_group_name}': {len(users)}"
+        f"  ({total_instances} instance(s) total)"
+    )
+    for name, data in users.items():
+        count = len(data["nodes"])
+        print(f"   • {name}  [{count} instance{'s' if count > 1 else ''}]")
+
+    # Count connected instances
+    connected_instances = [
+        (ng_name, ni)
+        for ng_name, data in users.items()
+        for ni in data["nodes"]
+        if ni["connected"]
+    ]
+    connected_groups = len(set(ng_name for ng_name, _ in connected_instances))
+    print(
+        f"\n▶ Instances connected to {side} socket {repr(target_socket)}: "
+        f"{len(connected_instances)} instance(s) across {connected_groups} group(s)"
+    )
+
+    if not users:
+        print("\n   (no users found)")
+    else:
+        for ng_name, data in users.items():
+            instance_count = len(data["nodes"])
+            print(f"\n  ┌─ [{ng_name}] ({instance_count})")
+            for i, ni in enumerate(data["nodes"]):
+                prefix = "└─" if i == instance_count - 1 else "├─"
+                label_str = (
+                    f" (label: '{ni['node_label']}')" if ni["node_label"] else ""
+                )
+
+                if not ni["socket_found"]:
+                    tag = "⚠ socket not found"
+                elif ni["connected"]:
+                    tag = blue("LINKED")
+                else:
+                    continue
+
+                print(f"  {prefix} node: '{ni['node_name']}'{label_str}  —  {tag}")
+                for lnk in ni["links"]:
+                    print(f"         {lnk}")
+
+    print("\n" + "=" * 60)
+    print("Done.")
+
+    # ─── Open a Geometry Nodes window for each connected parent group ─────────
+    connected_groups_data = {
+        ng_name: data
+        for ng_name, data in users.items()
+        if any(ni["connected"] for ni in data["nodes"])
+    }
+
+    if connected_groups_data:
+        print(f"\nOpening {len(connected_groups_data)} Geometry Nodes window(s)…")
+        wm = bpy.context.window_manager
+        original_window = bpy.context.window
+
+        # Pass 1: create all windows first so each one has time to initialise
+        #         before we try to assign a node_tree to any of them.
+        created: list[tuple] = []  # (new_win, ng_name, ng)
+        for ng_name, data in connected_groups_data.items():
+            ng = data["ng"]
+            windows_before = list(wm.windows)
+            with bpy.context.temp_override(
+                window=original_window, screen=original_window.screen
+            ):
+                bpy.ops.wm.window_new()
+
+            new_win = next((w for w in wm.windows if w not in windows_before), None)
+            if not new_win:
+                print(f"  [WARN] window_new() failed for '{ng_name}'")
+                continue
+            area = new_win.screen.areas[0]
+            area.type = "NODE_EDITOR"
+            created.append((new_win, ng_name, ng))
+
+        # Pass 2: assign node_trees now that all windows are initialised
+        for new_win, ng_name, ng in created:
+            area = new_win.screen.areas[0]
+            space = area.spaces.active
+            if space and space.type == "NODE_EDITOR":
+                space.tree_type = "GeometryNodeTree"
+                space.pin = True
+                space.node_tree = ng
+                print(f"  ✓ Pinned '{ng_name}'")
+            else:
+                print(
+                    f"  [WARN] Space type '{space.type if space else None}' for '{ng_name}'"
+                )
+    else:
+        print("\n(No connected instances — no windows opened.)")
+
+
+class MYN_OT_find_nodegroup_socket_users(bpy.types.Operator):
+    bl_idname = "nodes.myn_find_nodegroup_socket_users"
+    bl_label = "MYN - Find Node Group Socket Users"
+    bl_description = (
+        "Find every node group that uses the target node group and has a "
+        "connection on the specified socket, then open pinned GN windows"
+    )
+
+    target_group_name: bpy.props.StringProperty(
+        name="Target Node Group",
+        default="",
+    )
+    target_socket: bpy.props.StringProperty(
+        name="Socket Name",
+        default="",
+    )
+    socket_side: bpy.props.EnumProperty(
+        name="Socket Side",
+        items=[("INPUT", "Input", ""), ("OUTPUT", "Output", "")],
+        default="OUTPUT",
+    )
+
+    def execute(self, context):
+        find_users(
+            target_group_name=self.target_group_name,
+            target_socket=self.target_socket,
+            socket_side=self.socket_side,
+        )
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+
 classes = [
     MYN_OT_move_node_group,
     MYN_OT_AddLocalGeometryNodeGroups,
-    # MYN_OT_rename_node_group,
+    # MYN_OT_rename_node_group,# broken
+    MYN_OT_find_nodegroup_socket_users,
 ]
 
 
