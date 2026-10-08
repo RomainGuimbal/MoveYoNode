@@ -17,7 +17,7 @@ license = ["SPDX:GPL-3.0-or-later"]
 
 copyright = ["2026 Romain Guimbal"]
 
-wheels = ["./wheels/cadquery_ocp_novtk-7.9.3.1-cp313-cp313-win_amd64.whl"]
+wheels = ["./wheels/blender_asset_tracer-2.2.0-py3-none-any.whl"]
 
 [permissions]
 files = "Create and open blend files"
