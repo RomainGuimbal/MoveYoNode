@@ -262,7 +262,7 @@ class MYN_OT_AddLocalGeometryNodeGroups(bpy.types.Operator):
     bl_label = "MYN - Add Local Geometry Node Groups"
     bl_options = {"REGISTER", "UNDO"}
 
-    """Add all local Geometry Nodes groups to the active node tree. /!\\ CODED BY MISTRAL LLM"""
+    """Add all local Geometry Nodes groups to the active node tree. CODED BY MISTRAL LLM"""
 
     def execute(self, context):
         # Get the current node editor and its node tree
@@ -293,13 +293,15 @@ class MYN_OT_AddLocalGeometryNodeGroups(bpy.types.Operator):
             self.report({"INFO"}, "No other local Geometry Node groups found")
             return {"FINISHED"}
 
-        # Add each group as a node, positioned next to each other
-        x_offset = 0
-        for ng in local_groups:
+                # Add each group as a node, positioned in a grid pattern with 30 columns
+        grid_width = 30  # Number of columns in the grid
+        for i, ng in enumerate(local_groups):
             node = node_tree.nodes.new("GeometryNodeGroup")
             node.node_tree = ng
-            node.location = (cursor.x + x_offset, cursor.y)
-            x_offset += 160  # Adjust spacing as needed
+            # Calculate grid position
+            row = i // grid_width
+            col = i % grid_width
+            node.location = (cursor.x + col * 160, cursor.y - row * 300)
 
         return {"FINISHED"}
 
