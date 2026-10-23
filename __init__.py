@@ -8,6 +8,7 @@ import re
 import os
 import tempfile
 from blender_asset_tracer.blendfile import open_cached
+from . import node_report
 
 ####################################
 DIRECTORY = "C:/Users/romai/Documents/Projets/26 - Bezier Quest/"
@@ -117,15 +118,27 @@ def children_files(parent: str, lvl):
 
 
 def file_contains_node_group(filepath, ng_name):
-    """Check if a blend file contains a specific node group using BAT (no Blender process)."""
+    """True if the file stores ng_name locally OR links it (from anywhere)."""
     try:
-        with open_cached(filepath) as bf:
+        # BAT expects a pathlib.Path (it calls .as_posix() internally), not a str
+        with open_cached(Path(filepath)) as bf:
             for nt in bf.find_blocks_from_code(b"NT"):
-                if nt.id.name.decode().removeprefix("NT") == ng_name:
-                    return True
+                raw = nt.id.name.decode(errors="ignore")
+                # stored name is like "NTMyGroup"; linked IDs may carry
+                # a library prefix before the actual name
+                stored = raw[2:]                      # strip "NT"
+                is_linked = bool(nt.id.libraries)     # -> points to LI blocks
+                if not is_linked:
+                    if stored == ng_name:
+                        return True
+                else:
+                    # strip any "<LibName>" style prefix before comparing
+                    if stored == ng_name or stored.endswith(ng_name):
+                        return True
             return False
-    except Exception:
-        return False
+    except Exception as e:
+        print(f"{RED}[BAT ERROR] {filepath}: {e}{RESET}")
+        return True  # conservative: don't filter a file out on error
 
 
 def remap_in_children_files(parent_file, ng_name, lvl):
@@ -351,7 +364,7 @@ def remap_name_in_files(ng_name: str, new_name: str, level: int, parent_file: st
             "        bpy.ops.wm.open_mainfile(filepath=f)\n"
             "        existing = bpy.data.node_groups.get(ng_name)\n"
             "        if existing is None:\n"
-            "            print(f'[Skip] {f}: no node group named {ng_name!r}')\n"
+            "            print(f'[Skip] {f}')\n"
             "            continue\n"
             "        # If the node group is linked, relink it from the source file\n"
             "        if existing.library:\n"
@@ -694,9 +707,11 @@ classes = [
 def register():
     for c in classes:
         bpy.utils.register_class(c)
+    node_report.register()
 
 
 def unregister():
+    node_report.unregister()
     for c in classes[::-1]:
         bpy.utils.unregister_class(c)
 
@@ -711,3 +726,4 @@ if __package__ == "__main__":
 # TODO workflow "make local > edit > replace"
 
 # TODO workflow "append > edit > replace" ?
+# TODO copy to new file
