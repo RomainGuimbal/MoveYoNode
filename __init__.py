@@ -696,11 +696,26 @@ class MYN_OT_find_nodegroup_socket_users(bpy.types.Operator):
         return context.window_manager.invoke_props_dialog(self)
 
 
+class MYN_OT_rename_gn_modifiers_to_group_name(bpy.types.Operator):
+    bl_idname = "object.myn_rename_gn_modifiers_to_group_name"
+    bl_label = "Rename Modifiers to Node Group Name"
+
+    def execute(self, context):
+        """Rename all Geometry Nodes modifiers to match their node group names."""
+        for obj in bpy.data.objects:
+            for mod in obj.modifiers:
+                if mod.type == "NODES" and mod.node_group:
+                    mod.name = mod.node_group.name
+
+        return {"FINISHED"}
+
+
 classes = [
     MYN_OT_move_node_group,
     MYN_OT_AddLocalGeometryNodeGroups,
     # MYN_OT_rename_node_group,# broken
     MYN_OT_find_nodegroup_socket_users,
+    MYN_OT_rename_gn_modifiers_to_group_name,
 ]
 
 
