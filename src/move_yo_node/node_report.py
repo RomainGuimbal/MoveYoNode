@@ -1,5 +1,6 @@
 import bpy
 from pathlib import Path
+from . import preferences
 from .bat_utils import node_groups_in_blend
 
 REPORT_TEXT_PREFIX = "BAT_NodeGroup_Report"
@@ -126,10 +127,14 @@ class MYN_OT_node_group_report(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return bool(bpy.data.filepath) and context.area.type == "NODE_EDITOR"
+        return bool(bpy.data.filepath) and context.area is not None and context.area.type == "NODE_EDITOR"
 
     def execute(self, context):
-        node_group_name = context.space_data.edit_tree.nodes.active.node_tree.name
+        node = context.space_data.edit_tree.nodes.active
+        if node is None or node.type != "GROUP" or node.node_tree is None:
+            self.report({"ERROR"}, "Select a group node first")
+            return {"CANCELLED"}
+        node_group_name = node.node_tree.name
 
         try:
             from blender_asset_tracer import blendfile  # noqa: F401
@@ -146,9 +151,9 @@ class MYN_OT_node_group_report(bpy.types.Operator):
             return {"CANCELLED"}
 
         current_path = Path(bpy.data.filepath).resolve()
-        folder = current_path.parent
+        folder = preferences.project_directory(context)
 
-        blend_files = sorted(folder.glob("SP*.blend"))
+        blend_files = sorted(folder.glob(preferences.level_file_glob(context)))
         results = [_analyze_blend_file(path, target_name) for path in blend_files]
 
         linked_files = [r for r in results if r.get("linked_target")]

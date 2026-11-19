@@ -29,49 +29,28 @@ def decode(value):
 
 
 def local_node_group_name(block):
-    """Name of a local bNodeTree / NT block."""
-    for path in ((b"id", b"name"), b"name"):
-        raw = safe_get(block, path)
-        if raw:
-            return decode(raw)
-    return None
-
-
-def linked_id_node_group_name(block):
-    """
-    Name of a linked ID block.
-
-    Linked datablocks in a .blend are stored as ID blocks whose names are
-    prefixed with the two-character ID code, e.g. b'NTMyNodeGroup'.
-    """
-    raw = safe_get(block, b"name")
+    """Name of a local bNodeTree / NT block, without the 'NT' ID code prefix."""
+    raw = safe_get(block, b"id_name")
     if not raw:
         raw = safe_get(block, (b"id", b"name"))
-
     name = decode(raw)
     if name and name.startswith("NT"):
         return name[2:]
-    return None
+    return name
 
 
-def library_path(block, is_id_block):
+def library_path(block):
     """
     Return the source library path for a linked datablock, or None if local.
-    """
-    if is_id_block:
-        lib = safe_pointer(block, b"lib")
-    else:
-        lib = safe_pointer(block, (b"id", b"lib"))
-        # Fallback in case BAT stored the block differently.
-        if lib is None:
-            lib = safe_pointer(block, b"lib")
 
+    bNodeTree has no top-level 'lib' field; the library pointer lives in the
+    embedded ID struct, so it must be read as (b"id", b"lib").
+    """
+    lib = safe_pointer(block, (b"id", b"lib"))
     if lib is None:
         return None
 
-    raw_name = safe_get(lib, b"name")
-    lib_name = decode(raw_name)
-
+    lib_name = decode(safe_get(lib, b"name"))
     if not lib_name:
         return "<library block without filepath>"
 
@@ -93,37 +72,28 @@ def node_groups_in_blend(bfile):
 
     Returns a list of dicts:
         name, linked, library
+
+    Linked node groups are not stored as NT blocks in the referencing file, so
+    the libraries they come from are reported separately under the name of the
+    library file. Callers that need "does this file reference group X" should
+    check the library list rather than expecting an NT block.
     """
     infos = []
 
-    # Local node trees (bNodeTree / NT blocks)
     for block in bfile.find_blocks_from_code(b"NT"):
         name = local_node_group_name(block)
         if not name:
             continue
 
-        lib = library_path(block, is_id_block=False)
-        infos.append({
-            "name": name,
-            "linked": bool(lib),
-            "library": lib,
-        })
+        lib = library_path(block)
+        infos.append(
+            {
+                "name": name,
+                "linked": bool(lib),
+                "library": lib,
+            }
+        )
 
-    # Linked ID blocks. Linked node groups are stored as ID blocks
-    # named b'NTNodeGroupName'.
-    for block in bfile.find_blocks_from_code(b"ID"):
-        name = linked_id_node_group_name(block)
-        if not name:
-            continue
-
-        lib = library_path(block, is_id_block=True)
-        infos.append({
-            "name": name,
-            "linked": True,
-            "library": lib,
-        })
-
-    # Deduplicate the same linked entry if it appears both as NT and ID.
     seen = set()
     unique = []
     for info in infos:
@@ -134,3 +104,23 @@ def node_groups_in_blend(bfile):
         unique.append(info)
 
     return unique
+
+
+def libraries_in_blend(bfile):
+    """Paths of every library a .blend file links from."""
+    paths = []
+    for block in bfile.find_blocks_from_code(b"LI"):
+        name = decode(safe_get(block, b"name"))
+        if not name:
+            continue
+        try:
+            if name.startswith("//"):
+                paths.append(str((bfile.filepath.parent / name[2:]).resolve()))
+            else:
+                p = Path(name)
+                if not p.is_absolute():
+                    p = (bfile.filepath.parent / p).resolve()
+                paths.append(str(p))
+        except Exception:
+            paths.append(name)
+    return paths
