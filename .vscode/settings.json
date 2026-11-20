@@ -1,4 +1,7 @@
 {
+    "blender.addonFolders": [
+        "./src/move_yo_node"
+    ],
     "python.analysis.diagnosticSeverityOverrides": {
         "reportInvalidTypeForm": "none"
     },
