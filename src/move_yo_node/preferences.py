@@ -1,8 +1,9 @@
 """Addon preferences for move_yo_node.
 
-All filesystem locations the addon touches are user preferences, never module
+All user-chosen locations the addon touches are preferences, never module
 globals. This keeps the addon usable on any machine and lets the test harness
-point it at a temporary directory.
+point it at a temporary directory. The Blender binary is not one of them: the
+running binary is always the right one (see ``blender_binary``).
 
 The path helpers read from a plain ``Settings`` object. When the addon is
 installed, ``Settings`` mirrors the registered ``AddonPreferences``; when it is
@@ -29,7 +30,6 @@ class Settings:
     project_directory: str = ""
     file_prefix: str = DEFAULT_FILE_PREFIX
     file_suffix: str = DEFAULT_FILE_SUFFIX
-    blender_executable: str = ""
 
 
 _settings = Settings()
@@ -42,7 +42,6 @@ def settings() -> Settings:
         _settings.project_directory = prefs.project_directory
         _settings.file_prefix = prefs.file_prefix
         _settings.file_suffix = prefs.file_suffix
-        _settings.blender_executable = prefs.blender_executable
     return _settings
 
 
@@ -78,16 +77,6 @@ class MYN_AddonPreferences(bpy.types.AddonPreferences):
         default=DEFAULT_FILE_SUFFIX,
     )
 
-    blender_executable: bpy.props.StringProperty(
-        name="Blender Executable",
-        description=(
-            "Blender binary used for background work. "
-            "Leave empty to reuse the running Blender"
-        ),
-        default="",
-        subtype="FILE_PATH",
-    )
-
     def draw(self, context):
         layout = self.layout
         col = layout.column()
@@ -95,7 +84,6 @@ class MYN_AddonPreferences(bpy.types.AddonPreferences):
         row = col.row(align=True)
         row.prop(self, "file_prefix")
         row.prop(self, "file_suffix")
-        col.prop(self, "blender_executable")
 
 
 def project_directory(context=None):
@@ -124,11 +112,13 @@ def file_suffix(context=None) -> str:
     return settings().file_suffix
 
 
-def blender_executable(context=None) -> str:
-    """Path to the Blender binary used for background subprocesses."""
-    cfg = settings()
-    if cfg.blender_executable.strip():
-        return bpy.path.abspath(cfg.blender_executable)
+def blender_binary() -> str:
+    """Blender used for background work: the one this session already runs on.
+
+    Not a preference. A subprocess from another build would rewrite files with
+    a version the session cannot read back, so the running binary is the only
+    correct choice.
+    """
     return bpy.app.binary_path
 
 

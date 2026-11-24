@@ -51,15 +51,12 @@ class TestPreferencesPaths(MynTestCase):
     def test_level_file_glob(self):
         self.assertEqual(preferences.level_file_glob(), "SP Level *.blend")
 
-    def test_blender_executable_defaults_to_running_binary(self):
-        cfg = preferences.settings()
-        cfg.blender_executable = ""
-        self.assertEqual(preferences.blender_executable(), bpy.app.binary_path)
+    def test_background_work_uses_the_running_binary(self):
+        from move_yo_node import _blender_command
 
-    def test_blender_executable_from_preference(self):
-        cfg = preferences.settings()
-        cfg.blender_executable = "C:/custom/blender.exe"
-        self.assertEqual(preferences.blender_executable(), "C:/custom/blender.exe")
+        command = _blender_command("--python", "script.py")
+        self.assertEqual(command[0], bpy.app.binary_path)
+        self.assertIn("--factory-startup", command)
 
 
 class TestLevelFiles(MynTestCase):

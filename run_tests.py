@@ -1,9 +1,11 @@
 """Run the move_yo_node test suite inside Blender.
 
 Usage:
-    python run_tests.py                 # run everything
-    python run_tests.py test_levels     # run one module
-    python run_tests.py -v              # verbose
+    MYN_BLENDER=<blender executable> python run_tests.py             # run everything
+    MYN_BLENDER=<blender executable> python run_tests.py test_levels # run one module
+    MYN_BLENDER=<blender executable> python run_tests.py -v          # verbose
+
+MYN_BLENDER is required: this script never searches the filesystem for Blender.
 
 The suite runs in a throwaway Blender process started with --factory-startup,
 so the user's Blender preferences are never read or written.
@@ -22,7 +24,9 @@ BLENDER = os.environ.get("MYN_BLENDER", "")
 # Script executed inside Blender. The paths are derived from this file's
 # location, so no absolute path is ever written down.
 INNER = r"""
-import sys, unittest
+import bpy, sys, unittest
+# Never write the user's preferences, whatever the add-on does.
+bpy.context.preferences.use_preferences_save = False
 sys.path.insert(0, {repo_root!r})
 sys.path.insert(0, {src_dir!r})
 import tests
@@ -46,21 +50,17 @@ sys.exit(0 if result.wasSuccessful() else 1)
 """
 
 
-def find_blender() -> str:
-    if BLENDER:
-        return BLENDER
-    if sys.platform == "win32":
-        candidates = sorted(
-            Path("C:/Program Files/Blender Foundation").glob("Blender */blender.exe")
-        )
-        if candidates:
-            return str(candidates[-1])
-    return "blender"
-
-
 def main(argv: list[str]) -> int:
     verbose = "-v" in argv
     names = [a for a in argv if not a.startswith("-")]
+
+    if not BLENDER:
+        print(
+            "MYN_BLENDER is not set: point it at the Blender 5.3 executable. "
+            "This runner never searches the filesystem for Blender.",
+            file=sys.stderr,
+        )
+        return 2
 
     script = INNER.format(
         repo_root=str(REPO_ROOT),
@@ -70,13 +70,8 @@ def main(argv: list[str]) -> int:
         verbosity=2 if verbose else 1,
     )
 
-    blender = find_blender()
-    if not Path(blender).exists() and blender != "blender":
-        print(f"Blender not found at {blender}", file=sys.stderr)
-        return 2
-
     cmd = [
-        blender,
+        BLENDER,
         "--background",
         "--factory-startup",
         "--python-exit-code",
@@ -84,7 +79,7 @@ def main(argv: list[str]) -> int:
         "--python-expr",
         script,
     ]
-    print(f"Running tests with {blender}")
+    print(f"Running tests with {BLENDER}")
     result = subprocess.run(cmd, cwd=str(REPO_ROOT))
     return result.returncode
 

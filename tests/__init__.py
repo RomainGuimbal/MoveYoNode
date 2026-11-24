@@ -70,12 +70,10 @@ class MynTestCase(unittest.TestCase):
             "project_directory": cfg.project_directory,
             "file_prefix": cfg.file_prefix,
             "file_suffix": cfg.file_suffix,
-            "blender_executable": cfg.blender_executable,
         }
         cfg.project_directory = str(self.tmpdir)
         cfg.file_prefix = self.prefix
         cfg.file_suffix = self.suffix
-        cfg.blender_executable = bpy.app.binary_path
         self.addCleanup(self._restore_prefs)
 
     def _restore_prefs(self):
