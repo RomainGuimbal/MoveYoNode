@@ -16,26 +16,28 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 SRC_DIR = REPO_ROOT / "src"
+TESTS_DIR = REPO_ROOT / "tests"
 BLENDER = os.environ.get("MYN_BLENDER", "")
 
-# Script executed inside Blender. SRC_DIR is derived from this file's location,
-# so no absolute path is ever written down.
+# Script executed inside Blender. The paths are derived from this file's
+# location, so no absolute path is ever written down.
 INNER = r"""
 import sys, unittest
+sys.path.insert(0, {repo_root!r})
 sys.path.insert(0, {src_dir!r})
-import move_yo_node.tests
+import tests
 
 loader = unittest.TestLoader()
 names = {names!r}
 if names:
     suite = unittest.TestSuite(
         loader.loadTestsFromName(
-            n if "." in n else "move_yo_node.tests." + n
+            n if "." in n else "tests." + n
         ) for n in names
     )
 else:
     suite = loader.discover(
-        {tests_dir!r}, pattern="test_*.py", top_level_dir={src_dir!r}
+        {tests_dir!r}, pattern="test_*.py", top_level_dir={repo_root!r}
     )
 
 runner = unittest.TextTestRunner(verbosity={verbosity})
@@ -61,8 +63,9 @@ def main(argv: list[str]) -> int:
     names = [a for a in argv if not a.startswith("-")]
 
     script = INNER.format(
+        repo_root=str(REPO_ROOT),
         src_dir=str(SRC_DIR),
-        tests_dir=str(SRC_DIR / "move_yo_node" / "tests"),
+        tests_dir=str(TESTS_DIR),
         names=names,
         verbosity=2 if verbose else 1,
     )

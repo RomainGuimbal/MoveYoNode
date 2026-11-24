@@ -5,7 +5,7 @@ from pathlib import Path
 from blender_asset_tracer.blendfile import open_cached
 
 from move_yo_node import bat_utils, node_report
-from move_yo_node.tests import MynTestCase
+from tests import MynTestCase
 
 
 class TestBatUtils(MynTestCase):

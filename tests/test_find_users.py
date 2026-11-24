@@ -7,7 +7,7 @@ windows is the caller's job (open_pinned_windows).
 import bpy
 
 from move_yo_node import find_users, report_users
-from move_yo_node.tests import MynTestCase
+from tests import MynTestCase
 
 
 def _add_group_node(parent, child, name):

@@ -12,7 +12,7 @@ from move_yo_node import (
     move_ng_to_level_file,
     node_group_level,
 )
-from move_yo_node.tests import MynTestCase
+from tests import MynTestCase
 
 
 class TestNodeGroupLevel(MynTestCase):

@@ -2,7 +2,7 @@
 
 import bpy
 
-from move_yo_node.tests import MynTestCase
+from tests import MynTestCase
 
 
 class TestRenameModifiers(MynTestCase):

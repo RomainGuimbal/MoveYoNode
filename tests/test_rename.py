@@ -8,7 +8,7 @@ from move_yo_node import (
     remap_name_in_files,
     rename_node_group,
 )
-from move_yo_node.tests import MynTestCase
+from tests import MynTestCase
 
 
 class TestRenameNodeGroup(MynTestCase):

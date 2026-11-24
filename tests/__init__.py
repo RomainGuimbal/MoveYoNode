@@ -18,22 +18,25 @@ from pathlib import Path
 
 import bpy
 
-# This file lives at <repo>/src/move_yo_node/tests/__init__.py, so the package
-# root is two levels up. Derived from __file__ — no absolute path is written.
-PACKAGE_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = PACKAGE_ROOT.parent
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+# This file lives at <repo>/tests/__init__.py. The repo root goes on sys.path so
+# `tests` imports as a package, src/ so the add-on imports. Both are derived from
+# __file__ — no absolute path is written.
+TESTS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = TESTS_DIR.parent
+SRC_DIR = REPO_ROOT / "src"
+for entry in (REPO_ROOT, SRC_DIR):
+    if str(entry) not in sys.path:
+        sys.path.insert(0, str(entry))
 
 # Make the bundled BAT wheel importable, mirroring what the addon manifest does.
-WHEELS = sorted((PACKAGE_ROOT / "wheels").glob("*.whl"))
+WHEELS = sorted((SRC_DIR / "move_yo_node" / "wheels").glob("*.whl"))
 for wheel in WHEELS:
     if str(wheel) not in sys.path:
         sys.path.insert(0, str(wheel))
 
 import move_yo_node  # noqa: E402
 from move_yo_node import bat_utils, preferences  # noqa: E402
-from move_yo_node.tests import build_fixtures  # noqa: E402
+from . import build_fixtures  # noqa: E402
 
 
 _registered = False
@@ -124,7 +127,7 @@ class MynTestCase(unittest.TestCase):
 def load_tests(loader, standard_tests, pattern):
     """Discover every test_*.py in this package."""
     suite = unittest.TestSuite()
-    for test_file in sorted(Path(__file__).parent.glob("test_*.py")):
-        module_name = f"move_yo_node.tests.{test_file.stem}"
+    for test_file in sorted(TESTS_DIR.glob("test_*.py")):
+        module_name = f"tests.{test_file.stem}"
         suite.addTests(loader.loadTestsFromName(module_name))
     return suite
