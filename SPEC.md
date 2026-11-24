@@ -2,7 +2,7 @@
 
 A Blender 5.3 add-on (`move_yo_node`, UI name "Move yo' Node") for moving and
 renaming node groups across a hierarchy of `.blend` files without breaking the
-links between them. It also aims at including a variety diagnosis and managment tools. Package: `src/move_yo_node/`.
+links between them. Package: `src/move_yo_node/`.
 
 Blender has no API to relocate a datablock between files. Every operation here
 is therefore implemented as: edit the current session, then rewrite the
@@ -63,41 +63,67 @@ Every operation must leave the project satisfying all of these.
    uses. Only the named group ends up stored in the target.
 7. **Unreadable is not skippable.** A `.blend` that BAT cannot parse is treated
    as a possible user and included in the rewrite, never silently dropped.
-8. **Failures are reported, not printed and swallowed.** A subprocess reports
-   success through a marker line; absence of the marker is a failure.
+8. **Failures are reported, not swallowed.** A subprocess reports success
+   through a marker line; absence of the marker is a failure.
 
 ---
 
-## 3. Features
+## 3. User-facing features
 
-| #    | Feature                                                                                                                         | Entry point                                                                    | Tests             |
-| ---- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------- |
-| 3.1  | Preferences: `project_directory`, `file_prefix`, `file_suffix`, `blender_executable`                                            | Add-on preferences; `preferences.settings()` mirrors them as a plain dataclass | `test_levels`     |
-| 3.2  | Level detection: `find_level_from_path`, `node_group_level` (required level), `get_level_from_ng` (current level, `-1` = local) | —                                                                              | `test_levels`     |
-| 3.3  | Level file discovery: `level_files()`, `children_files(parent, lvl)`                                                            | —                                                                              | `test_levels`     |
-| 3.4  | Move a group into a level file, creating it if missing                                                                          | `node.myn_move_node_group`                                                     | `test_move`       |
-| 3.5  | Rename a group and propagate the name                                                                                           | `node.myn_rename_node_group`                                                   | `test_rename`     |
-| 3.6  | Find socket users: per instantiating group, report node name, socket presence, connection and links                             | `nodes.myn_find_nodegroup_socket_users`                                        | `test_find_users` |
-| 3.7  | Rename `NODES` modifiers to their group's name                                                                                  | `object.myn_rename_gn_modifiers_to_group_name`                                 | `test_modifiers`  |
-| 3.8  | Node group report: per file, local vs linked and from where; flags duplicates, collisions, similar names                        | `node.myn_node_group_report`                                                   | `test_report`     |
-| 3.9  | BAT helpers: `local_node_group_name`, `library_path`, `node_groups_in_blend`, `libraries_in_blend`                              | `bat_utils`                                                                    | `test_report`     |
-| 3.10 | Add a group node for every local Geometry Nodes group, gridded from the cursor                                                  | `node.add_local_geometry_node_groups`                                          | none              |
+Only what someone runs from Blender. Each row is an operator (or the
+preferences panel) plus the test module covering it.
 
-`preferences.settings()` returns a `Settings` dataclass that mirrors the
-registered `AddonPreferences` when the add-on is enabled and acts as the source
-of truth when it is not. RNA structs cannot be instantiated outside the add-on
-registry, so this indirection is what makes the path helpers testable.
+| # | The user wants to | Entry point | Tests |
+|---|---|---|---|
+| 3.1 | Point the add-on at a project folder and file naming | Preferences, `Edit > Preferences > Add-ons > Move yo' Node` | `test_levels` |
+| 3.2 | Move the selected group into another level file | `node.myn_move_node_group` | `test_move` |
+| 3.3 | Rename the selected group across the whole project | `node.myn_rename_node_group` | `test_rename` |
+| 3.4 | Find which groups use the selected group on a given socket | `nodes.myn_find_nodegroup_socket_users` | `test_find_users` |
+| 3.5 | Rename modifiers after the group they use | `object.myn_rename_gn_modifiers_to_group_name` | `test_modifiers` |
+| 3.6 | See where a group is stored and who links it | `node.myn_node_group_report` | `test_report` |
+| 3.7 | Drop a node for every local Geometry Nodes group | `node.add_local_geometry_node_groups` | none |
 
-`find_users` is pure analysis and must work in `--background`: it opens no
-windows. `open_pinned_windows` is the separate GUI half, called only by the
-operator.
+What the user actually observes:
 
-The report scans level files and writes to the system console and to a
-`BAT_NodeGroup_Report_<name>` text datablock.
+* **Move** proposes the level the group's dependencies allow and lets them
+  change it before confirming. The group leaves its old file, the current file
+  is reloaded from disk, and Blender's undo does not cover the other files —
+  the work already happened on disk when the operator returns.
+* **Rename** renames in the stored file, then in every file that links it.
+* **Find socket users** prints a report and, in the GUI, opens a pinned
+  Geometry Node editor per connected parent group. It opens nothing in
+  `--background`.
+* **Report** writes to the system console and to a
+  `BAT_NodeGroup_Report_<name>` text datablock: per file, local vs linked and
+  from where, flagging duplicate names, local/linked collisions and similar
+  names.
+* **Move** and **rename** take seconds per rewritten file; the cursor switches
+  to `WAIT` while they run.
 
 ---
 
-## 4. Code map
+## 4. Internals
+
+Supporting machinery. No user ever calls these directly; they exist so the
+operators in section 3 obey section 2.
+
+| Area | API | Notes |
+|---|---|---|
+| Level math | `find_level_from_path`, `node_group_level`, `get_level_from_ng` | Number in a file name; required level of a group; current level of a group |
+| Discovery | `level_files`, `children_files`, `all_blend_files` | Level files sorted by level; the `.blend` set to scan |
+| Reference index | `group_references`, `referencing_files`, `file_contains_node_group` | One BAT pass over the folder giving `group name -> files`, plus an `UNREADABLE` key |
+| File inspection | `bat_utils`: `local_node_group_name`, `library_path`, `node_groups_in_blend`, `libraries_in_blend` | Reads `NT`/`LI` blocks; `library_path` must read `(b"id", b"lib")` because `bNodeTree` has no top-level `lib` |
+| Settings indirection | `preferences.settings()` -> `Settings` | Dataclass mirroring the registered `AddonPreferences`, and the source of truth when the add-on is not enabled; RNA structs cannot be instantiated outside the registry |
+| Background rewriting | `_blender_command`, `_run_blender_script`, `_store_group_script`, `_move_group_script`, `_remove_group_from`, `_remap_script`, `_run_in_parallel`, `_script_succeeded` | Generated scripts, one per operation, split across worker processes |
+| Analysis / GUI split | `find_users` (pure), `open_pinned_windows` (GUI only) | Keeps the socket analysis usable in `--background` |
+
+Moves and renames both look their targets up in `group_references()` rather than
+re-reading files per check. `remap_in_children_files` and `remap_name_in_files`
+are the shared rewrite passes.
+
+---
+
+## 5. Code map
 
 ```
 src/move_yo_node/__init__.py       level logic, operators, subprocess scripts, reference index
@@ -108,13 +134,9 @@ src/move_yo_node/wheels/           bundled BAT wheel, declared by blender_manife
 run_tests.py                       launches the suite inside Blender
 ```
 
-Moves and renames share one index: `group_references()` parses each `.blend` in
-the project folder once and returns `group name -> files that reference it`.
-Operations look their targets up there instead of re-reading files per check.
-
 ---
 
-## 5. Testing
+## 6. Testing
 
 ```
 python run_tests.py              # everything
@@ -134,7 +156,7 @@ This document asserts nothing about the current pass rate. Run the suite.
 
 ---
 
-## 6. Known problems
+## 7. Known problems
 
 1. **Move refuses its own home.** `move_ng_to_level_file` returns `False` when
    the target file already stores the group. Three tests in `test_move.py`
@@ -165,7 +187,7 @@ This document asserts nothing about the current pass rate. Run the suite.
 
 ---
 
-## 7. Not implemented
+## 8. Not implemented
 
 Intended workflows, recorded from the project's history:
 
