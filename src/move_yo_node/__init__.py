@@ -123,38 +123,12 @@ def children_files(parent: str, lvl: int, context=None) -> list[Path]:
 
 
 def file_contains_node_group(filepath, ng_name: str) -> bool:
-    """True if the file stores or links a node group with this name.
+    """True if the file stores the group or links a library that stores it.
 
-    Uses Blender Asset Tracer to avoid launching Blender. Linked node groups are
-    not stored as NT blocks, so a file that only links the group is detected
-    through its library blocks instead.
+    A file that could not be parsed answers True: it might reference the group,
+    and skipping it would leave a link pointing at the old location.
     """
-    try:
-        from blender_asset_tracer.blendfile import open_cached
-    except ImportError:
-        return True  # cannot filter, let the caller decide
-
-    try:
-        with open_cached(Path(filepath)) as bf:
-            for block in bf.find_blocks_from_code(b"NT"):
-                raw = block.id_name
-                if not raw:
-                    continue
-                stored = raw.decode(errors="ignore")
-                if stored.startswith("NT"):
-                    stored = stored[2:]
-                if stored == ng_name:
-                    return True
-            # A file that links the group has no NT block for it; it references
-            # the library that stores it. Be permissive: any library reference
-            # means the file may need relinking.
-            for block in bf.find_blocks_from_code(b"LI"):
-                if block.get(b"name"):
-                    return True
-            return False
-    except Exception as exc:
-        print(f"{RED}[BAT ERROR] {filepath}: {exc}{RESET}")
-        return True  # conservative: don't filter a file out on error
+    return Path(filepath) in referencing_files(ng_name)
 
 
 # ─────────────────────────── BLENDER SUBPROCESS ──────────────────────────── #
@@ -170,7 +144,7 @@ def _blender_command(*args) -> list[str]:
     ]
 
 
-def _run_blender_script(script: str) -> subprocess.CompletedProcess:
+def _run_blender_script(script: str, echo_prefix: str = "[") -> subprocess.CompletedProcess:
     """Run a Python script in a throwaway Blender process."""
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as tmp:
         tmp.write(script)
@@ -182,7 +156,7 @@ def _run_blender_script(script: str) -> subprocess.CompletedProcess:
             text=True,
         )
         for line in result.stdout.splitlines():
-            if line.startswith("["):
+            if line.startswith(echo_prefix):
                 print(line)
         if result.returncode != 0:
             print(f"{RED}[BLENDER ERROR]{RESET} {result.stderr.strip()}")
@@ -191,44 +165,151 @@ def _run_blender_script(script: str) -> subprocess.CompletedProcess:
         os.remove(script_path)
 
 
-def create_file(filepath):
-    """Create an empty .blend file at the given path."""
-    filepath = str(filepath).replace("\\", "/")
-    script = (
-        "import bpy\n"
-        "bpy.ops.wm.read_factory_settings(use_empty=True)\n"
-        f"bpy.ops.wm.save_as_mainfile(filepath={filepath!r})\n"
-    )
-    _run_blender_script(script)
+def _move_group_script(source_path, target_filepath, ng_name):
+    """Script that performs a move: this copy goes, the source links it back.
+    Runs inside the source file, so the group it stores locally is *the* copy
+    being moved. The order matters and is not negotiable:
 
+    1. Link the group from the target and make it local there. That gives the
+       move something to hand the users over to.
+    2. ``user_remap`` while the local copy is still alive. Removing first frees
+       the datablock under the group nodes and loses them.
+    3. Drop the local copy and save once. The source file ends up linking the
+       group from its new home, in the same place its own copy occupied.
 
-def append_node_group_to_file(target_filepath, node_group_name, source_path=None):
-    """Store a copy of a node group inside another file, as a local datablock.
-
-    `source_path` defaults to the file that actually stores the group: the
-    library it is linked from when it is linked, otherwise the current file.
+    Saving once is what keeps this safe: until the save, the session holds the
+    old copy and the users still resolve. Refusing every write before the save
+    means a failed move cannot leave both files claiming the group.
     """
-    if source_path is None:
-        ng = bpy.data.node_groups.get(node_group_name)
-        source_path = resolve_library_path(ng) if ng and ng.library else bpy.data.filepath
-    source_path = str(source_path).replace("\\", "/")
-    target_filepath = str(target_filepath).replace("\\", "/")
-
-    script = (
-        "import bpy\n"
-        f"bpy.ops.wm.open_mainfile(filepath={target_filepath!r})\n"
-        f"with bpy.data.libraries.load({source_path!r}, link=True, recursive=False) as (_, data_to):\n"
-        f"    data_to.node_groups = [{node_group_name!r}]\n"
-        "ng = data_to.node_groups[0]\n"
-        "if ng is None:\n"
-        f"    print('[ERROR] node group {node_group_name!r} not found in source')\n"
+    return (
+        "import bpy, os, traceback\n"
+        f"target = {str(target_filepath)!r}\n"
+        f"name = {ng_name!r}\n"
+        "local = bpy.data.node_groups.get(name)\n"
+        "if local is None or local.library is not None:\n"
+        "    print('[ERROR] the source file does not store this group locally')\n"
+        "    print('[moved] False')\n"
         "else:\n"
-        "    ng.make_local()\n"
-        "    ng.use_fake_user = True\n"
-        "    bpy.ops.wm.save_mainfile()\n"
-        f"    print('[Stored] {node_group_name} -> {target_filepath}')\n"
+        "    try:\n"
+        "        with bpy.data.libraries.load(target, link=True, recursive=False) as (_, data_to):\n"
+        "            data_to.node_groups = [name]\n"
+        "        linked = data_to.node_groups[0]\n"
+        "        if linked is None:\n"
+        "            print('[ERROR] %r is not stored in %s' % (name, target))\n"
+        "            print('[moved] False')\n"
+        "        else:\n"
+        "            local.user_remap(linked)\n"
+        "            local.use_fake_user = False\n"
+        "            bpy.data.node_groups.remove(local)\n"
+        "            bpy.ops.wm.save_mainfile(filepath=os.path.abspath(bpy.data.filepath))\n"
+        f"            print('[Moved] {ng_name} -> {target_filepath}')\n"
+        "            print('[moved] True')\n"
+        "    except Exception as e:\n"
+        "        print('[ERROR] move failed, nothing written: %s' % e)\n"
+        "        traceback.print_exc()\n"
+        "        print('[moved] False')\n"
     )
-    _run_blender_script(script)
+
+
+def _store_group_script(target_filepath, source_path, ng_name):
+    """Script that adds a group to the target file as a local datablock.
+
+    Used when the group is linked from elsewhere: the target is opened, the
+    group is linked in and made local, and the rest of the dependency chain it
+    drags in is dropped so only the requested group is added. The target is
+    saved once at the end.
+    """
+    return (
+        "import bpy, os, traceback\n"
+        f"source = {str(source_path)!r}\n"
+        f"target = {str(target_filepath)!r}\n"
+        f"name = {ng_name!r}\n"
+        "try:\n"
+        "    if os.path.isfile(target):\n"
+        "        bpy.ops.wm.open_mainfile(filepath=target)\n"
+        "    else:\n"
+        "        bpy.ops.wm.read_factory_settings(use_empty=True)\n"
+        "    # Only groups that were already stored locally belong in this file.\n"
+        "    before = {g.name for g in bpy.data.node_groups if not g.library}\n"
+        "    with bpy.data.libraries.load(source, link=True, recursive=False) as (_, data_to):\n"
+        "        data_to.node_groups = [name]\n"
+        "    ng = data_to.node_groups[0]\n"
+        "    if ng is None:\n"
+        "        print('[ERROR] node group not found in source:', name)\n"
+        "        print('[stored] False')\n"
+        "    else:\n"
+        "        with bpy.context.temp_override(id=ng):\n"
+        "            bpy.ops.object.make_local(type='ALL')\n"
+        "        ng.use_fake_user = True\n"
+        "        # Linking a group also pulls the groups it uses, and make_local\n"
+        "        # makes that whole chain local. Only the requested group belongs\n"
+        "        # in this file; drop the rest of the chain it dragged along.\n"
+        "        for other in list(bpy.data.node_groups):\n"
+        "            if other is ng or other.name in before:\n"
+        "                continue\n"
+        "            other.use_fake_user = False\n"
+        "            bpy.data.node_groups.remove(other)\n"
+        "        bpy.ops.wm.save_as_mainfile(filepath=target, check_existing=False)\n"
+        f"        print('[Stored] {ng_name} -> {target_filepath}')\n"
+        "        print('[stored] True')\n"
+        "except Exception as e:\n"
+        "    print('[ERROR] store failed, nothing written: %s' % e)\n"
+        "    traceback.print_exc()\n"
+        "    print('[stored] False')\n"
+    )
+
+
+def _script_succeeded(script: str, marker: str) -> bool:
+    """Run a script in background Blender and check for its success marker."""
+    return marker in _run_blender_script(script).stdout
+
+
+def _remove_group_from(filepath, ng_name: str) -> bool:
+    """Delete a locally stored node group from a file on disk.
+
+    Refuses to remove anything that is only linked from that file: a link is
+    not a copy, and deleting it would detach the file that owns nothing.
+    """
+    script = (
+        "import bpy, os, traceback\n"
+        f"path = {str(filepath)!r}\n"
+        f"name = {ng_name!r}\n"
+        "try:\n"
+        "    bpy.ops.wm.open_mainfile(filepath=path)\n"
+        "    ng = bpy.data.node_groups.get(name)\n"
+        "    if ng is None or ng.library is not None:\n"
+        "        print('[ERROR] %r is not stored in %s' % (name, path))\n"
+        "        print('[removed] False')\n"
+        "    else:\n"
+        "        # Anything still using it here would be broken by the removal;\n"
+        "        # the callers are repointed before this runs.\n"
+        "        users = ng.users\n"
+        "        ng.use_fake_user = False\n"
+        "        bpy.data.node_groups.remove(ng)\n"
+        "        bpy.ops.wm.save_mainfile(filepath=path)\n"
+        "        print('[Removed] %s (had %d user(s))' % (name, users))\n"
+        "        print('[removed] True')\n"
+        "except Exception as e:\n"
+        "    print('[ERROR] remove failed: %s' % e)\n"
+        "    traceback.print_exc()\n"
+        "    print('[removed] False')\n"
+    )
+    return _script_succeeded(script, "[removed] True")
+
+
+def stored_in_file(filepath, ng_name: str) -> bool:
+    """True if the file on disk stores the group as a local datablock.
+
+    A file that does not exist yet stores nothing, which is the normal case for
+    a level file the move is about to create.
+    """
+    from blender_asset_tracer.blendfile import open_cached
+
+    path = Path(filepath)
+    if not path.is_file():
+        return False
+    with open_cached(path) as bfile:
+        return ng_name in _stored_groups(bfile)
 
 
 def link_node_group(target_filepath, ng_name: str):
@@ -245,7 +326,13 @@ def link_node_group(target_filepath, ng_name: str):
 
 
 def _remap_script(files, ng_name, parent_file, new_name=None):
-    """Script that relinks (and optionally renames) a group in several files."""
+    """Script that relinks (and optionally renames) a group in several files.
+
+    The replacement is loaded *before* the stale datablock is touched, so the
+    group nodes always have a live tree to point at. Removing first would free
+    the datablock while nodes still reference it, which loses the users and
+    raises ``StructRNA ... has been removed``.
+    """
     return (
         "import bpy, traceback\n"
         f"files = {[str(f) for f in files]!r}\n"
@@ -255,26 +342,29 @@ def _remap_script(files, ng_name, parent_file, new_name=None):
         "for f in files:\n"
         "    try:\n"
         "        bpy.ops.wm.open_mainfile(filepath=f)\n"
+        "        target_name = new_name or ng_name\n"
         "        existing = bpy.data.node_groups.get(ng_name)\n"
         "        if existing is None:\n"
-        "            print(f'[Skip] {f}: no node group named {ng_name!r}')\n"
+        "            print('[Skip] %s: no node group named %r' % (f, ng_name))\n"
         "            continue\n"
-        "        if existing.library:\n"
-        "            existing.user_clear()\n"
-        "            bpy.data.node_groups.remove(existing)\n"
+        "        already = bpy.data.node_groups.get(target_name)\n"
+        "        if existing.library and already is existing:\n"
+        "            print('[Skip] %s: already links from the right place' % f)\n"
+        "            continue\n"
         "        with bpy.data.libraries.load(parent_file, link=True, recursive=False) as (_, data_to):\n"
-        "            data_to.node_groups = [new_name or ng_name]\n"
+        "            data_to.node_groups = [target_name]\n"
         "        linked = data_to.node_groups[0]\n"
         "        if linked is None:\n"
-        "            print(f'[ERROR] {f}: could not link {new_name or ng_name!r}')\n"
+        "            print('[ERROR] %s: could not link %r' % (f, target_name))\n"
         "            continue\n"
-        "        if not existing.library:\n"
+        "        # Redirect the users while the old datablock is still alive.\n"
+        "        if existing is not linked:\n"
         "            existing.user_remap(linked)\n"
         "        bpy.data.orphans_purge(do_recursive=True)\n"
         "        bpy.ops.wm.save_mainfile(filepath=f)\n"
-        "        print(f'[Relinked] {f}')\n"
+        "        print('[Relinked] %s' % f)\n"
         "    except Exception as e:\n"
-        "        print(f'[ERROR] {f}: {e}')\n"
+        "        print('[ERROR] %s: %s' % (f, e))\n"
         "        traceback.print_exc()\n"
     )
 
@@ -290,13 +380,107 @@ def _run_in_parallel(files, script_factory, max_workers=None):
         list(ex.map(lambda c: _run_blender_script(script_factory(c)), chunks))
 
 
-def remap_in_children_files(parent_file, ng_name, lvl):
-    """Relink every file above `lvl` so it points at the new parent file."""
-    targets = children_files(parent_file, lvl)
-    if not targets:
-        return
+def all_blend_files(context=None) -> list[Path]:
+    """Every .blend file in the project directory, sorted by name."""
+    directory = preferences.project_directory(context)
+    return sorted(directory.glob("*.blend"), key=lambda p: p.name)
 
-    files_with_ng = [f for f in targets if file_contains_node_group(f, ng_name)]
+
+# Key under which group_references() reports files it could not parse.
+UNREADABLE = "\0unreadable"
+
+
+def _stored_groups(bfile) -> set[str]:
+    """Names of the node groups a .blend file stores locally."""
+    names = set()
+    for block in bfile.find_blocks_from_code(b"NT"):
+        raw = block.id_name
+        if not raw:
+            continue
+        name = raw.decode(errors="ignore")
+        if name.startswith("NT"):
+            name = name[2:]
+        names.add(name)
+    return names
+
+
+def group_references(context=None) -> dict[str, set[Path]]:
+    """Map every node group name to the files that reference it.
+
+    One pass over the project directory: each file is parsed once to read both
+    the groups it stores and the libraries it links. A file that links a library
+    which stores the group counts as a reference, because that is how a linked
+    node group appears on disk. Used by moves and renames to avoid re-reading
+    the same .blend for every operation.
+
+    Files that cannot be read are reported under the ``UNREADABLE`` key so the
+    caller can keep them in the run instead of silently dropping their links.
+    """
+    files = all_blend_files(context)
+    stored: dict[Path, set[str]] = {}
+    linked: dict[Path, set[Path]] = {}
+    unreadable: set[Path] = set()
+
+    try:
+        from blender_asset_tracer.blendfile import open_cached
+    except ImportError:
+        return {UNREADABLE: set(files)}
+
+    for path in files:
+        try:
+            with open_cached(path) as bfile:
+                stored[path] = _stored_groups(bfile)
+                linked[path] = {Path(lib) for lib in bat_utils.libraries_in_blend(bfile)}
+        except Exception as exc:
+            print(f"{RED}[BAT ERROR] {path}: {exc}{RESET}")
+            unreadable.add(path)
+
+    refs: dict[str, set[Path]] = {}
+    for path, names in stored.items():
+        for name in names:
+            refs.setdefault(name, set()).add(path)
+
+    # A file referencing a library that stores the group references the group.
+    for path, libraries in linked.items():
+        for library in libraries:
+            for name in stored.get(library, ()):
+                refs.setdefault(name, set()).add(path)
+
+    if unreadable:
+        refs[UNREADABLE] = unreadable
+    return refs
+
+
+def referencing_files(ng_name: str, context=None) -> set[Path]:
+    """Files that reference `ng_name`, including any that could not be read."""
+    refs = group_references(context)
+    return refs.get(ng_name, set()) | refs.get(UNREADABLE, set())
+
+
+def remap_in_children_files(parent_file, ng_name, lvl, previous_file=None, files=None):
+    """Relink every other file that references the group to its new location.
+
+    A moved group is followed by all of its users, wherever they live: the
+    files are not limited to those above `lvl`, because a file at any level may
+    link the group and every one of those links must point at the new home.
+
+    `files` is the list gathered before the move, when the old location still
+    existed. Passing it avoids re-reading the directory after the group has
+    already changed hands, which would miss the files that used to point there.
+
+    `previous_file` is where the group used to be stored. That file is skipped:
+    it is handled by the move itself, which replaces its local copy with a link.
+    """
+    current = Path(bpy.data.filepath).resolve() if bpy.data.filepath else None
+    target = Path(str(parent_file)).resolve() if parent_file else None
+    previous = Path(str(previous_file)).resolve() if previous_file else None
+
+    candidates = files if files is not None else referencing_files(ng_name)
+    files_with_ng = [
+        f
+        for f in candidates
+        if f.resolve() not in (current, target, previous)
+    ]
     if not files_with_ng:
         return
 
@@ -307,28 +491,79 @@ def remap_in_children_files(parent_file, ng_name, lvl):
 
 
 def move_ng_to_level_file(ng_name: str, level) -> bool:
-    """Store a node group in the level file for `level` and relink users."""
+    """Move a node group into the level file for `level`.
+
+    A move takes the group *out* of the file that stored it: that file ends up
+    linking the group from its new home, and every other file that referenced
+    the group is repointed too. Storing a group where it already lives is
+    refused rather than perfomed twice, because a second copy in the target
+    file is a duplicate nobody asked for.
+    """
     target_filepath = preferences.level_file_path(level)
+    target_resolved = target_filepath.resolve()
 
-    if not target_filepath.is_file():
-        create_file(target_filepath)
-
-    replaced_ng = bpy.data.node_groups.get(ng_name)
-    if replaced_ng is None:
+    moved_ng = bpy.data.node_groups.get(ng_name)
+    if moved_ng is None:
         return False
 
-    append_node_group_to_file(target_filepath, ng_name)
-
-    # Blender refuses to link from the file it already has open, so when the
-    # group is being stored in the current file there is nothing to relink here.
+    # Where the group is stored right now: the library it is linked from, or
+    # the current file when it is local here.
     current = Path(bpy.data.filepath).resolve() if bpy.data.filepath else None
-    if current != target_filepath.resolve():
+    stored_in = resolve_library_path(moved_ng)
+    source = Path(stored_in).resolve() if stored_in else current
+    if source is None:
+        return False
+
+    if source == target_resolved:
+        print(f"{RED}[Move] {ng_name} is already stored in {target_filepath.name}{RESET}")
+        return False
+    if stored_in_file(target_filepath, ng_name):
+        print(f"{RED}[Move] {target_filepath.name} already stores {ng_name}{RESET}")
+        return False
+
+    # Everything that linked the group before the move, gathered while the old
+    # location still exists. The source is handled on its own below, and the
+    # target is where the group is going.
+    followers = [
+        f
+        for f in referencing_files(ng_name)
+        if f.resolve() not in (source, current, target_resolved)
+    ]
+
+    if stored_in is None:
+        # The group is stored here. Linking a file into itself is impossible in
+        # Blender, so the copy has to be added to the target before this file
+        # can link it back.
+        if current is None or not os.path.isfile(current):
+            return False
+        bpy.ops.wm.save_mainfile()
+        if not _script_succeeded(_store_group_script(target_filepath, str(current), ng_name), "[stored] True"):
+            return False
+        if not _script_succeeded(_move_group_script(str(current), str(target_filepath), ng_name), "[moved] True"):
+            return False
+        # The file has already been rewritten: the session still holds the old
+        # local copy, so reload from disk to pick up the link that replaced it.
+        bpy.ops.wm.open_mainfile(filepath=str(current))
+        moved_ng = bpy.data.node_groups.get(ng_name)
+        if moved_ng is None or moved_ng.library is None:
+            return False
+        previous_home = str(current)
+    else:
+        # The group lives in another file: store it in the target, then that
+        # file stops being the home of this group.
+        if not _script_succeeded(_store_group_script(target_filepath, stored_in, ng_name), "[stored] True"):
+            return False
+        if not _remove_group_from(stored_in, ng_name):
+            return False
+        previous_home = stored_in
         linked_ng = link_node_group(target_filepath, ng_name)
         if linked_ng is None:
             return False
-        replaced_ng.user_remap(linked_ng)
+        moved_ng.user_remap(linked_ng)
+        if bpy.data.filepath and os.path.isfile(bpy.data.filepath):
+            bpy.ops.wm.save_mainfile()
 
-    remap_in_children_files(str(target_filepath), ng_name, level)
+    remap_in_children_files(str(target_filepath), ng_name, level, previous_file=previous_home, files=followers)
     return True
 
 
@@ -336,20 +571,19 @@ def move_ng_to_level_file(ng_name: str, level) -> bool:
 
 
 def remap_name_in_files(ng_name: str, new_name: str, level: int, parent_file: str):
-    """Rename a node group in every file that stores or links it."""
+    """Rename a node group in every other file that stores or links it.
+
+    Like a move, a rename must be followed by every user: the files are not
+    filtered by level, because a file at any level may link the group.
+    """
     current = Path(bpy.data.filepath).resolve() if bpy.data.filepath else None
-    targets = []
-    for fp in level_files():
-        if fp.resolve() == current:
-            continue
-        f_lvl = find_level_from_path(fp)
-        if f_lvl >= level or f_lvl == -1:
-            targets.append(fp)
+    parent = Path(str(parent_file)).resolve() if parent_file else None
 
-    if not targets:
-        return
-
-    files_with_ng = [f for f in targets if file_contains_node_group(f, ng_name)]
+    files_with_ng = [
+        f
+        for f in referencing_files(ng_name)
+        if f.resolve() not in (current, parent)
+    ]
     if not files_with_ng:
         return
 

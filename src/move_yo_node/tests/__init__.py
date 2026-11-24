@@ -32,7 +32,7 @@ for wheel in WHEELS:
         sys.path.insert(0, str(wheel))
 
 import move_yo_node  # noqa: E402
-from move_yo_node import preferences  # noqa: E402
+from move_yo_node import bat_utils, preferences  # noqa: E402
 from move_yo_node.tests import build_fixtures  # noqa: E402
 
 
@@ -100,6 +100,25 @@ class MynTestCase(unittest.TestCase):
     def group_node(self, tree_name: str, node_name: str):
         tree = bpy.data.node_groups[tree_name]
         return tree.nodes[node_name]
+
+    def disk_groups(self, path) -> dict[str, str | None]:
+        """Node groups actually stored in a .blend on disk.
+
+        Returns name -> library path (None when the group is local to the file).
+        Read with Blender Asset Tracer, so the answer comes from the bytes on
+        disk rather than from whatever the current session happens to hold.
+        """
+        from blender_asset_tracer.blendfile import open_cached
+
+        with open_cached(Path(path)) as bfile:
+            return {g["name"]: g["library"] for g in bat_utils.node_groups_in_blend(bfile)}
+
+    def disk_libraries(self, path) -> set[str]:
+        """Library paths a .blend on disk links from."""
+        from blender_asset_tracer.blendfile import open_cached
+
+        with open_cached(Path(path)) as bfile:
+            return set(bat_utils.libraries_in_blend(bfile))
 
 
 def load_tests(loader, standard_tests, pattern):
